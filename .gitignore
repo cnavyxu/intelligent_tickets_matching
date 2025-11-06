@@ -1,0 +1,6 @@
+# Temporary and system files
+.DS_Store
+Thumbs.db
+
+# Extracted document artifacts
+/docx_extracted/
