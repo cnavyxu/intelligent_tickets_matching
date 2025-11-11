@@ -172,13 +172,62 @@ class TicketUsage:
 
 
 @dataclass
+class TicketDistribution:
+    """票据分布统计"""
+    large_count: int = 0
+    large_ratio: float = 0.0
+    large_amount: float = 0.0
+    medium_count: int = 0
+    medium_ratio: float = 0.0
+    medium_amount: float = 0.0
+    small_count: int = 0
+    small_ratio: float = 0.0
+    small_amount: float = 0.0
+
+
+@dataclass
+class ScoreBreakdown:
+    """得分明细"""
+    avg_maturity_score: float = 0.0
+    avg_acceptor_score: float = 0.0
+    avg_amount_score: float = 0.0
+    avg_organization_score: float = 0.0
+    total_weighted_score: float = 0.0
+
+
+@dataclass
 class AllocationResult:
-    """分配结果"""
+    """
+    配票结果
+    
+    包含完整的配票信息、统计数据和性能指标
+    """
+    # 基础信息
     order_id: str
-    selected_tickets: List[TicketUsage]
-    total_amount: float
-    bias_amount: float
-    ticket_count: int
-    total_score: float
-    constraints_met: bool
-    warnings: List[str] = field(default_factory=list)
+    target_amount: float  # 目标金额（付款单金额）
+    selected_tickets: List[TicketUsage]  # 选中的票据组合
+    
+    # 金额统计
+    total_amount: float  # 票据组合金额
+    bias_amount: float  # 差额（目标金额 - 组合金额）
+    wire_transfer_diff: float = 0.0  # 电汇尾差（如有）
+    
+    # 票据统计
+    ticket_count: int = 0  # 票据数量
+    split_count: int = 0  # 拆分票据数量
+    split_amount: float = 0.0  # 拆票金额
+    remain_amount: float = 0.0  # 留存金额
+    
+    # 得分信息
+    total_score: float = 0.0  # 组合总得分
+    score_breakdown: Optional[ScoreBreakdown] = None  # 得分明细
+    
+    # 票据分布
+    selected_distribution: Optional[TicketDistribution] = None  # 选票结构分布
+    remaining_distribution: Optional[TicketDistribution] = None  # 余票库存分布（实际）
+    expected_distribution: Optional[TicketDistribution] = None  # 余票库存分布（期望）
+    
+    # 执行信息
+    execution_time_ms: float = 0.0  # 选票耗时（毫秒）
+    constraints_met: bool = True  # 约束满足情况
+    warnings: List[str] = field(default_factory=list)  # 警告信息
