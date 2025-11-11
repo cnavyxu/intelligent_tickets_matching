@@ -2,7 +2,7 @@
 
 ## 概述
 
-智能配票算法API提供RESTful接口，支持单笔和批量配票操作。
+智能配票算法API使用FastAPI框架构建，提供RESTful接口，支持单笔和批量配票操作。
 
 ## 启动服务
 
@@ -11,7 +11,21 @@ cd /home/engine/project
 python api/app.py
 ```
 
-服务默认运行在 `http://localhost:5000`
+或使用uvicorn命令：
+
+```bash
+uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload
+```
+
+服务默认运行在 `http://localhost:8000`
+
+## FastAPI 特性
+
+- **自动生成交互式API文档**: 访问 `http://localhost:8000/docs` 查看Swagger UI
+- **备用API文档**: 访问 `http://localhost:8000/redoc` 查看ReDoc
+- **自动数据验证**: 使用Pydantic模型进行请求和响应验证
+- **类型提示**: 完整的类型注解支持
+- **高性能**: 基于Starlette和Pydantic，性能优异
 
 ## API 接口
 
@@ -218,13 +232,13 @@ python api/app.py
 
 ```bash
 # 健康检查
-curl http://localhost:5000/health
+curl http://localhost:8000/health
 
 # 获取默认配置
-curl http://localhost:5000/api/v1/config/default
+curl http://localhost:8000/api/v1/config/default
 
 # 单笔配票
-curl -X POST http://localhost:5000/api/v1/allocate \
+curl -X POST http://localhost:8000/api/v1/allocate \
   -H "Content-Type: application/json" \
   -d '{
     "order": {
@@ -250,7 +264,7 @@ curl -X POST http://localhost:5000/api/v1/allocate \
 import requests
 import json
 
-url = "http://localhost:5000/api/v1/allocate"
+url = "http://localhost:8000/api/v1/allocate"
 data = {
     "order": {
         "id": "O001",
@@ -273,6 +287,51 @@ result = response.json()
 print(json.dumps(result, indent=2, ensure_ascii=False))
 ```
 
+### 使用 httpx (异步客户端)
+
+```python
+import httpx
+import asyncio
+
+async def test_allocate():
+    async with httpx.AsyncClient() as client:
+        response = await client.post(
+            "http://localhost:8000/api/v1/allocate",
+            json={
+                "order": {
+                    "id": "O001",
+                    "amount": 500000,
+                    "organization": "公司A"
+                },
+                "tickets": [
+                    {
+                        "id": "T001",
+                        "amount": 300000,
+                        "maturity_days": 90,
+                        "acceptor_class": 2,
+                        "organization": "公司A"
+                    }
+                ]
+            }
+        )
+        print(response.json())
+
+asyncio.run(test_allocate())
+```
+
+## 交互式API文档
+
+FastAPI自动生成交互式文档，可以直接在浏览器中测试API：
+
+1. **Swagger UI**: 访问 `http://localhost:8000/docs`
+   - 提供交互式界面
+   - 可以直接执行API请求
+   - 自动填充示例数据
+
+2. **ReDoc**: 访问 `http://localhost:8000/redoc`
+   - 提供更友好的文档阅读体验
+   - 适合查看完整的API规范
+
 ## 性能指标
 
 - 1万票据池，200万付款金额：< 200ms
@@ -285,12 +344,68 @@ API返回标准HTTP状态码：
 
 - `200`: 成功
 - `400`: 请求参数错误
+- `422`: 数据验证失败（Pydantic自动验证）
 - `500`: 服务器内部错误
 
 错误响应格式：
 ```json
 {
-  "success": false,
-  "error": "错误描述"
+  "detail": "错误描述"
 }
+```
+
+Pydantic验证错误示例：
+```json
+{
+  "detail": [
+    {
+      "type": "greater_than",
+      "loc": ["body", "order", "amount"],
+      "msg": "Input should be greater than 0",
+      "input": -100
+    }
+  ]
+}
+```
+
+## 部署建议
+
+### 开发环境
+
+```bash
+# 使用自动重载
+uvicorn api.app:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### 生产环境
+
+```bash
+# 使用多个worker进程
+uvicorn api.app:app --host 0.0.0.0 --port 8000 --workers 4
+
+# 或使用Gunicorn + Uvicorn worker
+gunicorn api.app:app -w 4 -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+```
+
+### Docker部署
+
+```dockerfile
+FROM python:3.9-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+CMD ["uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+## 依赖包
+
+```
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
 ```
