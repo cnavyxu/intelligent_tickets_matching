@@ -4,6 +4,7 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 from enum import Enum
+from decimal import Decimal
 
 
 class AmountLabel(str, Enum):
@@ -59,12 +60,12 @@ class SplitStrategy(str, Enum):
 class Ticket:
     """票据"""
     id: str
-    amount: float
+    amount: Decimal
     maturity_days: int
     acceptor_class: int
     amount_label: AmountLabel
     organization: str
-    available_amount: float = None
+    available_amount: Decimal = None
     
     def __post_init__(self):
         if self.available_amount is None:
@@ -75,7 +76,7 @@ class Ticket:
 class PaymentOrder:
     """付款单"""
     id: str
-    amount: float
+    amount: Decimal
     organization: str
     priority: int = 0
 
@@ -83,12 +84,12 @@ class PaymentOrder:
 @dataclass
 class AmountLabelConfig:
     """金额标签配置"""
-    large_range: tuple = (1000000, float('inf'))
-    medium_range: tuple = (100000, 1000000)
-    small_range: tuple = (0, 100000)
-    large_ratio: float = 0.5
-    medium_ratio: float = 0.3
-    small_ratio: float = 0.2
+    large_range: tuple = (Decimal('1000000'), Decimal('Infinity'))
+    medium_range: tuple = (Decimal('100000'), Decimal('1000000'))
+    small_range: tuple = (Decimal('0'), Decimal('100000'))
+    large_ratio: Decimal = Decimal('0.5')
+    medium_ratio: Decimal = Decimal('0.3')
+    small_ratio: Decimal = Decimal('0.2')
 
 
 @dataclass
@@ -117,11 +118,11 @@ class WeightConfig:
 class SplitConfig:
     """拆票配置"""
     allow_split: bool = True
-    tail_diff_abs: float = 10000
-    tail_diff_ratio: float = 0.3
-    min_remain: float = 50000
-    min_use: float = 50000
-    min_ratio: float = 0.3
+    tail_diff_abs: Decimal = Decimal('10000')
+    tail_diff_ratio: Decimal = Decimal('0.3')
+    min_remain: Decimal = Decimal('50000')
+    min_use: Decimal = Decimal('50000')
+    min_ratio: Decimal = Decimal('0.3')
     split_strategy: SplitStrategy = SplitStrategy.BY_AMOUNT_CLOSE
     split_condition_unlimited: bool = False
 
@@ -131,7 +132,7 @@ class ConstraintConfig:
     """约束配置"""
     max_ticket_count: int = 10
     small_ticket_limited: bool = False
-    small_ticket_80pct_amount_coverage: float = 0.5
+    small_ticket_80pct_amount_coverage: Decimal = Decimal('0.5')
     
     allowed_maturity_days: Optional[tuple] = None
     allowed_amount_range: Optional[tuple] = None
@@ -147,7 +148,7 @@ class AllocationConfig:
     constraint_config: ConstraintConfig = field(default_factory=ConstraintConfig)
     
     equal_amount_first: bool = False
-    equal_amount_threshold: float = 1000
+    equal_amount_threshold: Decimal = Decimal('1000')
 
 
 @dataclass
@@ -165,8 +166,8 @@ class TicketScore:
 class TicketUsage:
     """票据使用明细"""
     ticket: Ticket
-    used_amount: float
-    split_ratio: float
+    used_amount: Decimal
+    split_ratio: Decimal
     score: TicketScore
     order_index: int
 
@@ -175,14 +176,14 @@ class TicketUsage:
 class TicketDistribution:
     """票据分布统计"""
     large_count: int = 0
-    large_ratio: float = 0.0
-    large_amount: float = 0.0
+    large_ratio: Decimal = Decimal('0.0')
+    large_amount: Decimal = Decimal('0.0')
     medium_count: int = 0
-    medium_ratio: float = 0.0
-    medium_amount: float = 0.0
+    medium_ratio: Decimal = Decimal('0.0')
+    medium_amount: Decimal = Decimal('0.0')
     small_count: int = 0
-    small_ratio: float = 0.0
-    small_amount: float = 0.0
+    small_ratio: Decimal = Decimal('0.0')
+    small_amount: Decimal = Decimal('0.0')
 
 
 @dataclass
@@ -204,19 +205,19 @@ class AllocationResult:
     """
     # 基础信息
     order_id: str
-    target_amount: float  # 目标金额（付款单金额）
+    target_amount: Decimal  # 目标金额（付款单金额）
     selected_tickets: List[TicketUsage]  # 选中的票据组合
     
     # 金额统计
-    total_amount: float  # 票据组合金额
-    bias_amount: float  # 差额（目标金额 - 组合金额）
-    wire_transfer_diff: float = 0.0  # 电汇尾差（如有）
+    total_amount: Decimal  # 票据组合金额
+    bias_amount: Decimal  # 差额（目标金额 - 组合金额）
+    wire_transfer_diff: Decimal = Decimal('0.0')  # 电汇尾差（如有）
     
     # 票据统计
     ticket_count: int = 0  # 票据数量
     split_count: int = 0  # 拆分票据数量
-    split_amount: float = 0.0  # 拆票金额
-    remain_amount: float = 0.0  # 留存金额
+    split_amount: Decimal = Decimal('0.0')  # 拆票金额
+    remain_amount: Decimal = Decimal('0.0')  # 留存金额
     
     # 得分信息
     total_score: float = 0.0  # 组合总得分

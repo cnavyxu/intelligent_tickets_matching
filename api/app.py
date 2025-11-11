@@ -8,9 +8,11 @@ sys.path.insert(0, '/home/engine/project')
 
 from fastapi import FastAPI, HTTPException, status
 from fastapi.responses import JSONResponse
+from fastapi.encoders import jsonable_encoder
 from pydantic import BaseModel, Field, field_validator
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 import traceback
+from decimal import Decimal
 
 from src import (
     AllocationEngine,
@@ -28,6 +30,28 @@ from src import (
     SplitStrategy,
 )
 from src.utils import create_tickets_from_data, format_allocation_result
+import json
+
+
+class DecimalEncoder(json.JSONEncoder):
+    """自定义JSON编码器，处理Decimal类型"""
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return str(obj)
+        return super().default(obj)
+
+
+def convert_decimals_to_str(obj):
+    """递归转换对象中的所有Decimal为字符串"""
+    if isinstance(obj, Decimal):
+        return str(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_decimals_to_str(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_decimals_to_str(item) for item in obj]
+    elif isinstance(obj, tuple):
+        return tuple(convert_decimals_to_str(item) for item in obj)
+    return obj
 
 
 app = FastAPI(
@@ -41,28 +65,67 @@ app = FastAPI(
 class TicketData(BaseModel):
     """票据数据模型"""
     id: str = Field(..., description="票据ID")
-    amount: float = Field(..., gt=0, description="票据金额")
+    amount: Union[Decimal, float, int, str] = Field(..., description="票据金额")
     maturity_days: int = Field(..., ge=0, description="到期天数")
     acceptor_class: int = Field(..., ge=1, le=10, description="承兑人等级")
     organization: str = Field(default="default", description="所属组织")
+    
+    @field_validator('amount')
+    @classmethod
+    def validate_amount(cls, v):
+        if isinstance(v, Decimal):
+            return v
+        if isinstance(v, (int, float, str)):
+            result = Decimal(str(v))
+            if result <= 0:
+                raise ValueError('amount必须大于0')
+            return result
+        raise ValueError('amount必须是数字类型')
 
 
 class OrderData(BaseModel):
     """付款单数据模型"""
     id: str = Field(..., description="付款单ID")
-    amount: float = Field(..., gt=0, description="付款金额")
+    amount: Union[Decimal, float, int, str] = Field(..., description="付款金额")
     organization: str = Field(default="default", description="所属组织")
     priority: int = Field(default=0, ge=0, description="优先级")
+    
+    @field_validator('amount')
+    @classmethod
+    def validate_amount(cls, v):
+        if isinstance(v, Decimal):
+            return v
+        if isinstance(v, (int, float, str)):
+            result = Decimal(str(v))
+            if result <= 0:
+                raise ValueError('amount必须大于0')
+            return result
+        raise ValueError('amount必须是数字类型')
 
 
 class AmountLabelConfigData(BaseModel):
     """金额标签配置模型"""
-    large_range: List[float] = Field(default=[1000000, float('inf')], description="大额票范围")
-    medium_range: List[float] = Field(default=[100000, 1000000], description="中额票范围")
-    small_range: List[float] = Field(default=[0, 100000], description="小额票范围")
-    large_ratio: float = Field(default=0.5, ge=0, le=1, description="大额票理想比例")
-    medium_ratio: float = Field(default=0.3, ge=0, le=1, description="中额票理想比例")
-    small_ratio: float = Field(default=0.2, ge=0, le=1, description="小额票理想比例")
+    large_range: List[Union[Decimal, float, int, str]] = Field(default=[1000000, "Infinity"], description="大额票范围")
+    medium_range: List[Union[Decimal, float, int, str]] = Field(default=[100000, 1000000], description="中额票范围")
+    small_range: List[Union[Decimal, float, int, str]] = Field(default=[0, 100000], description="小额票范围")
+    large_ratio: Union[Decimal, float, str] = Field(default=0.5, description="大额票理想比例")
+    medium_ratio: Union[Decimal, float, str] = Field(default=0.3, description="中额票理想比例")
+    small_ratio: Union[Decimal, float, str] = Field(default=0.2, description="小额票理想比例")
+    
+    @field_validator('large_range', 'medium_range', 'small_range')
+    @classmethod
+    def validate_range(cls, v):
+        if len(v) != 2:
+            raise ValueError('范围必须包含两个值')
+        return [Decimal(str(x)) if str(x) != 'Infinity' else Decimal('Infinity') for x in v]
+    
+    @field_validator('large_ratio', 'medium_ratio', 'small_ratio')
+    @classmethod
+    def validate_ratio(cls, v):
+        result = Decimal(str(v))
+        if not (0 <= result <= 1):
+            raise ValueError('比例必须在0到1之间')
+        return result
 
 
 class WeightConfigData(BaseModel):
@@ -83,21 +146,45 @@ class WeightConfigData(BaseModel):
 class SplitConfigData(BaseModel):
     """拆票配置模型"""
     allow_split: bool = Field(default=True, description="是否允许拆票")
-    tail_diff_abs: float = Field(default=10000, ge=0, description="尾差绝对值阈值")
-    tail_diff_ratio: float = Field(default=0.3, ge=0, le=1, description="尾差比例阈值")
-    min_remain: float = Field(default=50000, ge=0, description="最小留存金额")
-    min_use: float = Field(default=50000, ge=0, description="最小使用金额")
-    min_ratio: float = Field(default=0.3, ge=0, le=1, description="最小拆分比例")
+    tail_diff_abs: Union[Decimal, float, int, str] = Field(default=10000, description="尾差绝对值阈值")
+    tail_diff_ratio: Union[Decimal, float, str] = Field(default=0.3, description="尾差比例阈值")
+    min_remain: Union[Decimal, float, int, str] = Field(default=50000, description="最小留存金额")
+    min_use: Union[Decimal, float, int, str] = Field(default=50000, description="最小使用金额")
+    min_ratio: Union[Decimal, float, str] = Field(default=0.3, description="最小拆分比例")
     split_strategy: str = Field(default="按金额-接近差额", description="拆票策略")
+    
+    @field_validator('tail_diff_abs', 'min_remain', 'min_use')
+    @classmethod
+    def validate_amount_field(cls, v):
+        result = Decimal(str(v))
+        if result < 0:
+            raise ValueError('金额必须大于等于0')
+        return result
+    
+    @field_validator('tail_diff_ratio', 'min_ratio')
+    @classmethod
+    def validate_ratio_field(cls, v):
+        result = Decimal(str(v))
+        if not (0 <= result <= 1):
+            raise ValueError('比例必须在0到1之间')
+        return result
 
 
 class ConstraintConfigData(BaseModel):
     """约束配置模型"""
     max_ticket_count: int = Field(default=10, ge=1, description="最大票据张数")
     small_ticket_limited: bool = Field(default=False, description="是否限制小票占比")
-    small_ticket_80pct_amount_coverage: float = Field(
-        default=0.5, ge=0, le=1, description="小票占比阈值"
+    small_ticket_80pct_amount_coverage: Union[Decimal, float, str] = Field(
+        default=0.5, description="小票占比阈值"
     )
+    
+    @field_validator('small_ticket_80pct_amount_coverage')
+    @classmethod
+    def validate_coverage(cls, v):
+        result = Decimal(str(v))
+        if not (0 <= result <= 1):
+            raise ValueError('占比必须在0到1之间')
+        return result
 
 
 class ConfigData(BaseModel):
@@ -107,7 +194,15 @@ class ConfigData(BaseModel):
     split_config: Optional[SplitConfigData] = Field(default=None)
     constraint_config: Optional[ConstraintConfigData] = Field(default=None)
     equal_amount_first: bool = Field(default=False, description="优先精确金额匹配")
-    equal_amount_threshold: float = Field(default=1000, ge=0, description="精确金额阈值")
+    equal_amount_threshold: Union[Decimal, float, int, str] = Field(default=1000, description="精确金额阈值")
+    
+    @field_validator('equal_amount_threshold')
+    @classmethod
+    def validate_threshold(cls, v):
+        result = Decimal(str(v))
+        if result < 0:
+            raise ValueError('阈值必须大于等于0')
+        return result
 
 
 class AllocateRequest(BaseModel):
@@ -278,6 +373,8 @@ def allocate_single(request: AllocateRequest):
         
         # 格式化输出
         output = format_allocation_result(result)
+        # 转换Decimal为字符串以支持JSON序列化
+        output = convert_decimals_to_str(output)
         
         return {
             "success": True,
@@ -343,6 +440,8 @@ def allocate_batch(request: BatchAllocateRequest):
         
         # 格式化输出
         outputs = [format_allocation_result(r) for r in results]
+        # 转换Decimal为字符串以支持JSON序列化
+        outputs = convert_decimals_to_str(outputs)
         
         return {
             "success": True,
@@ -376,7 +475,7 @@ def allocate_batch(request: BatchAllocateRequest):
 def get_default_config():
     """获取默认配置"""
     config = AllocationConfig()
-    return {
+    config_dict = {
         "success": True,
         "config": {
             "amount_label_config": {
@@ -418,6 +517,8 @@ def get_default_config():
             "equal_amount_threshold": config.equal_amount_threshold,
         }
     }
+    # 转换Decimal为字符串以支持JSON序列化
+    return convert_decimals_to_str(config_dict)
 
 
 if __name__ == '__main__':

@@ -5,6 +5,7 @@
 """
 import math
 from typing import List, Tuple
+from decimal import Decimal
 
 from .models import AllocationConfig, Ticket, AmountLabel
 
@@ -59,8 +60,8 @@ def validate_ticket_count(selected: List[Ticket], config: AllocationConfig) -> b
 
 
 def validate_small_ticket_constraint(
-    selected_tickets: List[Tuple[Ticket, float]],
-    order_amount: float,
+    selected_tickets: List[Tuple[Ticket, Decimal]],
+    order_amount: Decimal,
     config: AllocationConfig,
 ) -> Tuple[bool, str]:
     """
@@ -107,8 +108,8 @@ def validate_small_ticket_constraint(
 
 
 def validate_split_constraints(
-    ticket_amount: float,
-    split_ratio: float,
+    ticket_amount: Decimal,
+    split_ratio: Decimal,
     config: AllocationConfig,
 ) -> Tuple[bool, str]:
     """
@@ -127,7 +128,7 @@ def validate_split_constraints(
     sc = config.split_config
     
     used = split_ratio * ticket_amount
-    remain = (1 - split_ratio) * ticket_amount
+    remain = (Decimal('1') - split_ratio) * ticket_amount
     
     # 验证最小使用金额
     if used < sc.min_use:

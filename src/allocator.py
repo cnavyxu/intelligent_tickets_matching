@@ -7,6 +7,7 @@
 import random
 import time
 from typing import List, Tuple
+from decimal import Decimal
 
 from .models import (
     AllocationConfig,
@@ -153,14 +154,14 @@ class AllocationEngine:
             # 默认值
             maturity_range = (0, 365)
             amount_range_by_label = {
-                AmountLabel.LARGE: (1000000, 10000000),
-                AmountLabel.MEDIUM: (100000, 1000000),
-                AmountLabel.SMALL: (10000, 100000),
+                AmountLabel.LARGE: (Decimal('1000000'), Decimal('10000000')),
+                AmountLabel.MEDIUM: (Decimal('100000'), Decimal('1000000')),
+                AmountLabel.SMALL: (Decimal('10000'), Decimal('100000')),
             }
             inventory_distribution = {
-                AmountLabel.LARGE: 0.33,
-                AmountLabel.MEDIUM: 0.33,
-                AmountLabel.SMALL: 0.34,
+                AmountLabel.LARGE: Decimal('0.33'),
+                AmountLabel.MEDIUM: Decimal('0.33'),
+                AmountLabel.SMALL: Decimal('0.34'),
             }
         else:
             # 计算实际统计信息
@@ -186,7 +187,7 @@ class AllocationEngine:
                     )
                     inventory_distribution[label] = label_sum / total_amount
             else:
-                inventory_distribution = {label: 1.0 / len(AmountLabel) for label in AmountLabel}
+                inventory_distribution = {label: Decimal('1.0') / len(AmountLabel) for label in AmountLabel}
         
         return ScoringContext(
             maturity_range=maturity_range,
@@ -279,7 +280,7 @@ class AllocationEngine:
         """
         selected: List[TicketUsage] = []
         used_ids = set()
-        accumulated = 0.0
+        accumulated = Decimal('0.0')
         max_count = self.config.constraint_config.max_ticket_count
         
         for ts in scored_tickets:
@@ -305,13 +306,13 @@ class AllocationEngine:
                 and remaining_need > 0
             ):
                 desired_ratio = remaining_need / ts.ticket.amount
-                if desired_ratio <= 1.0:
+                if desired_ratio <= Decimal('1.0'):
                     ok, _ = validate_split_constraints(ts.ticket.amount, desired_ratio, self.config)
                     if ok:
                         to_use = min(ts.ticket.available_amount, desired_ratio * ts.ticket.amount)
                         split_ratio = to_use / ts.ticket.amount
                     else:
-                        adjusted_ratio = max(self.config.split_config.min_ratio, min(1.0, desired_ratio))
+                        adjusted_ratio = max(self.config.split_config.min_ratio, min(Decimal('1.0'), desired_ratio))
                         ok, _ = validate_split_constraints(ts.ticket.amount, adjusted_ratio, self.config)
                         if ok:
                             to_use = min(ts.ticket.available_amount, adjusted_ratio * ts.ticket.amount)
@@ -336,7 +337,7 @@ class AllocationEngine:
         return selected, remaining
 
     def _validate_constraints(
-        self, selected: List[TicketUsage], order_amount: float
+        self, selected: List[TicketUsage], order_amount: Decimal
     ) -> Tuple[bool, str]:
         """
         验证约束条件
@@ -413,11 +414,11 @@ class AllocationEngine:
             self.config.split_config.tail_diff_abs,
             order.amount * self.config.split_config.tail_diff_ratio
         )
-        wire_transfer_diff = bias if 0 < bias <= tail_diff_threshold else 0.0
+        wire_transfer_diff = bias if Decimal('0') < bias <= tail_diff_threshold else Decimal('0.0')
         
         # 计算得分统计
         if selected:
-            total_score = sum(tu.score.total_score * tu.split_ratio for tu in selected)
+            total_score = sum(tu.score.total_score * float(tu.split_ratio) for tu in selected)
             score_breakdown = ScoreBreakdown(
                 avg_maturity_score=sum(tu.score.maturity_score for tu in selected) / len(selected),
                 avg_acceptor_score=sum(tu.score.acceptor_score for tu in selected) / len(selected),
@@ -472,7 +473,7 @@ class AllocationEngine:
         return result
 
     def _calculate_distribution(
-        self, tickets: List[Ticket], amounts: List[float] = None
+        self, tickets: List[Ticket], amounts: List[Decimal] = None
     ) -> TicketDistribution:
         """
         计算票据分布统计
@@ -510,13 +511,13 @@ class AllocationEngine:
         
         return TicketDistribution(
             large_count=large_count,
-            large_ratio=large_count / total_count if total_count > 0 else 0.0,
+            large_ratio=Decimal(large_count) / Decimal(total_count) if total_count > 0 else Decimal('0.0'),
             large_amount=large_amount,
             medium_count=medium_count,
-            medium_ratio=medium_count / total_count if total_count > 0 else 0.0,
+            medium_ratio=Decimal(medium_count) / Decimal(total_count) if total_count > 0 else Decimal('0.0'),
             medium_amount=medium_amount,
             small_count=small_count,
-            small_ratio=small_count / total_count if total_count > 0 else 0.0,
+            small_ratio=Decimal(small_count) / Decimal(total_count) if total_count > 0 else Decimal('0.0'),
             small_amount=small_amount,
         )
 
