@@ -1,13 +1,15 @@
 """
-智能配票算法 - RESTful API服务
+智能配票算法 - RESTful API服务 (FastAPI)
 
 提供HTTP接口供外部系统调用配票服务
 """
 import sys
 sys.path.insert(0, '/home/engine/project')
 
-from flask import Flask, request, jsonify
-from typing import Dict, List, Any
+from fastapi import FastAPI, HTTPException, status
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator
+from typing import Dict, List, Any, Optional
 import traceback
 
 from src import (
@@ -28,342 +30,406 @@ from src import (
 from src.utils import create_tickets_from_data, format_allocation_result
 
 
-app = Flask(__name__)
+app = FastAPI(
+    title="智能配票算法API",
+    description="提供单笔和批量配票服务",
+    version="2.0",
+)
 
 
-def parse_config(config_dict: Dict[str, Any]) -> AllocationConfig:
+# Pydantic 数据模型
+class TicketData(BaseModel):
+    """票据数据模型"""
+    id: str = Field(..., description="票据ID")
+    amount: float = Field(..., gt=0, description="票据金额")
+    maturity_days: int = Field(..., ge=0, description="到期天数")
+    acceptor_class: int = Field(..., ge=1, le=10, description="承兑人等级")
+    organization: str = Field(default="default", description="所属组织")
+
+
+class OrderData(BaseModel):
+    """付款单数据模型"""
+    id: str = Field(..., description="付款单ID")
+    amount: float = Field(..., gt=0, description="付款金额")
+    organization: str = Field(default="default", description="所属组织")
+    priority: int = Field(default=0, ge=0, description="优先级")
+
+
+class AmountLabelConfigData(BaseModel):
+    """金额标签配置模型"""
+    large_range: List[float] = Field(default=[1000000, float('inf')], description="大额票范围")
+    medium_range: List[float] = Field(default=[100000, 1000000], description="中额票范围")
+    small_range: List[float] = Field(default=[0, 100000], description="小额票范围")
+    large_ratio: float = Field(default=0.5, ge=0, le=1, description="大额票理想比例")
+    medium_ratio: float = Field(default=0.3, ge=0, le=1, description="中额票理想比例")
+    small_ratio: float = Field(default=0.2, ge=0, le=1, description="小额票理想比例")
+
+
+class WeightConfigData(BaseModel):
+    """权重配置模型"""
+    w_maturity: float = Field(default=0.25, ge=0, le=1, description="到期期限权重")
+    w_acceptor: float = Field(default=0.25, ge=0, le=1, description="承兑人权重")
+    w_amount: float = Field(default=0.25, ge=0, le=1, description="金额权重")
+    w_organization: float = Field(default=0.25, ge=0, le=1, description="组织权重")
+    maturity_strategy: str = Field(default="优先远", description="到期期限策略")
+    maturity_threshold: int = Field(default=90, ge=0, description="到期期限阈值")
+    acceptor_strategy: str = Field(default="优先差的", description="承兑人策略")
+    acceptor_class_count: int = Field(default=5, ge=1, description="承兑人等级数")
+    amount_strategy: str = Field(default="优化期望库存占比", description="金额策略")
+    amount_sub_strategy: Optional[str] = Field(default=None, description="金额子策略")
+    organization_strategy: str = Field(default="优先同组织", description="组织策略")
+
+
+class SplitConfigData(BaseModel):
+    """拆票配置模型"""
+    allow_split: bool = Field(default=True, description="是否允许拆票")
+    tail_diff_abs: float = Field(default=10000, ge=0, description="尾差绝对值阈值")
+    tail_diff_ratio: float = Field(default=0.3, ge=0, le=1, description="尾差比例阈值")
+    min_remain: float = Field(default=50000, ge=0, description="最小留存金额")
+    min_use: float = Field(default=50000, ge=0, description="最小使用金额")
+    min_ratio: float = Field(default=0.3, ge=0, le=1, description="最小拆分比例")
+    split_strategy: str = Field(default="按金额-接近差额", description="拆票策略")
+
+
+class ConstraintConfigData(BaseModel):
+    """约束配置模型"""
+    max_ticket_count: int = Field(default=10, ge=1, description="最大票据张数")
+    small_ticket_limited: bool = Field(default=False, description="是否限制小票占比")
+    small_ticket_80pct_amount_coverage: float = Field(
+        default=0.5, ge=0, le=1, description="小票占比阈值"
+    )
+
+
+class ConfigData(BaseModel):
+    """配置数据模型"""
+    amount_label_config: Optional[AmountLabelConfigData] = Field(default=None)
+    weight_config: Optional[WeightConfigData] = Field(default=None)
+    split_config: Optional[SplitConfigData] = Field(default=None)
+    constraint_config: Optional[ConstraintConfigData] = Field(default=None)
+    equal_amount_first: bool = Field(default=False, description="优先精确金额匹配")
+    equal_amount_threshold: float = Field(default=1000, ge=0, description="精确金额阈值")
+
+
+class AllocateRequest(BaseModel):
+    """单笔配票请求模型"""
+    order: OrderData = Field(..., description="付款单信息")
+    tickets: List[TicketData] = Field(..., min_length=1, description="票据池")
+    config: Optional[ConfigData] = Field(default=None, description="配置参数")
+    seed: Optional[int] = Field(default=None, description="随机数种子")
+
+
+class BatchAllocateRequest(BaseModel):
+    """批量配票请求模型"""
+    orders: List[OrderData] = Field(..., min_length=1, description="付款单列表")
+    tickets: List[TicketData] = Field(..., min_length=1, description="票据池")
+    config: Optional[ConfigData] = Field(default=None, description="配置参数")
+    seed: Optional[int] = Field(default=None, description="随机数种子")
+
+
+class HealthResponse(BaseModel):
+    """健康检查响应"""
+    status: str
+    service: str
+    version: str
+
+
+class ErrorResponse(BaseModel):
+    """错误响应"""
+    success: bool = False
+    error: str
+
+
+class SuccessResponse(BaseModel):
+    """成功响应"""
+    success: bool = True
+    result: Optional[Dict[str, Any]] = None
+    results: Optional[List[Dict[str, Any]]] = None
+    summary: Optional[Dict[str, Any]] = None
+    config: Optional[Dict[str, Any]] = None
+
+
+def parse_config(config_data: Optional[ConfigData]) -> AllocationConfig:
     """
-    解析配置字典为AllocationConfig对象
+    解析配置数据为AllocationConfig对象
     
     参数:
-        config_dict: 配置字典
+        config_data: 配置数据对象
         
     返回:
         AllocationConfig对象
     """
+    if config_data is None:
+        return AllocationConfig()
+    
     # 解析金额标签配置
-    amount_label_cfg = config_dict.get('amount_label_config', {})
-    amount_label_config = AmountLabelConfig(
-        large_range=tuple(amount_label_cfg.get('large_range', [1000000, float('inf')])),
-        medium_range=tuple(amount_label_cfg.get('medium_range', [100000, 1000000])),
-        small_range=tuple(amount_label_cfg.get('small_range', [0, 100000])),
-        large_ratio=amount_label_cfg.get('large_ratio', 0.5),
-        medium_ratio=amount_label_cfg.get('medium_ratio', 0.3),
-        small_ratio=amount_label_cfg.get('small_ratio', 0.2),
-    )
+    amount_label_config = AmountLabelConfig()
+    if config_data.amount_label_config:
+        cfg = config_data.amount_label_config
+        amount_label_config = AmountLabelConfig(
+            large_range=tuple(cfg.large_range),
+            medium_range=tuple(cfg.medium_range),
+            small_range=tuple(cfg.small_range),
+            large_ratio=cfg.large_ratio,
+            medium_ratio=cfg.medium_ratio,
+            small_ratio=cfg.small_ratio,
+        )
     
     # 解析权重配置
-    weight_cfg = config_dict.get('weight_config', {})
-    weight_config = WeightConfig(
-        w_maturity=weight_cfg.get('w_maturity', 0.25),
-        w_acceptor=weight_cfg.get('w_acceptor', 0.25),
-        w_amount=weight_cfg.get('w_amount', 0.25),
-        w_organization=weight_cfg.get('w_organization', 0.25),
-        maturity_strategy=MaturityStrategy(weight_cfg.get('maturity_strategy', '优先远')),
-        maturity_threshold=weight_cfg.get('maturity_threshold', 90),
-        acceptor_strategy=AcceptorClassStrategy(weight_cfg.get('acceptor_strategy', '优先差的')),
-        acceptor_class_count=weight_cfg.get('acceptor_class_count', 5),
-        amount_strategy=AmountStrategy(weight_cfg.get('amount_strategy', '优化期望库存占比')),
-        amount_sub_strategy=AmountSubStrategy(weight_cfg.get('amount_sub_strategy', '排序')) if weight_cfg.get('amount_sub_strategy') else None,
-        organization_strategy=OrganizationStrategy(weight_cfg.get('organization_strategy', '优先同组织')),
-    )
+    weight_config = WeightConfig()
+    if config_data.weight_config:
+        cfg = config_data.weight_config
+        weight_config = WeightConfig(
+            w_maturity=cfg.w_maturity,
+            w_acceptor=cfg.w_acceptor,
+            w_amount=cfg.w_amount,
+            w_organization=cfg.w_organization,
+            maturity_strategy=MaturityStrategy(cfg.maturity_strategy),
+            maturity_threshold=cfg.maturity_threshold,
+            acceptor_strategy=AcceptorClassStrategy(cfg.acceptor_strategy),
+            acceptor_class_count=cfg.acceptor_class_count,
+            amount_strategy=AmountStrategy(cfg.amount_strategy),
+            amount_sub_strategy=AmountSubStrategy(cfg.amount_sub_strategy) if cfg.amount_sub_strategy else None,
+            organization_strategy=OrganizationStrategy(cfg.organization_strategy),
+        )
     
     # 解析拆票配置
-    split_cfg = config_dict.get('split_config', {})
-    split_config = SplitConfig(
-        allow_split=split_cfg.get('allow_split', True),
-        tail_diff_abs=split_cfg.get('tail_diff_abs', 10000),
-        tail_diff_ratio=split_cfg.get('tail_diff_ratio', 0.3),
-        min_remain=split_cfg.get('min_remain', 50000),
-        min_use=split_cfg.get('min_use', 50000),
-        min_ratio=split_cfg.get('min_ratio', 0.3),
-        split_strategy=SplitStrategy(split_cfg.get('split_strategy', '按金额-接近差额')),
-    )
+    split_config = SplitConfig()
+    if config_data.split_config:
+        cfg = config_data.split_config
+        split_config = SplitConfig(
+            allow_split=cfg.allow_split,
+            tail_diff_abs=cfg.tail_diff_abs,
+            tail_diff_ratio=cfg.tail_diff_ratio,
+            min_remain=cfg.min_remain,
+            min_use=cfg.min_use,
+            min_ratio=cfg.min_ratio,
+            split_strategy=SplitStrategy(cfg.split_strategy),
+        )
     
     # 解析约束配置
-    constraint_cfg = config_dict.get('constraint_config', {})
-    constraint_config = ConstraintConfig(
-        max_ticket_count=constraint_cfg.get('max_ticket_count', 10),
-        small_ticket_limited=constraint_cfg.get('small_ticket_limited', False),
-        small_ticket_80pct_amount_coverage=constraint_cfg.get('small_ticket_80pct_amount_coverage', 0.5),
-    )
+    constraint_config = ConstraintConfig()
+    if config_data.constraint_config:
+        cfg = config_data.constraint_config
+        constraint_config = ConstraintConfig(
+            max_ticket_count=cfg.max_ticket_count,
+            small_ticket_limited=cfg.small_ticket_limited,
+            small_ticket_80pct_amount_coverage=cfg.small_ticket_80pct_amount_coverage,
+        )
     
     return AllocationConfig(
         amount_label_config=amount_label_config,
         weight_config=weight_config,
         split_config=split_config,
         constraint_config=constraint_config,
-        equal_amount_first=config_dict.get('equal_amount_first', False),
-        equal_amount_threshold=config_dict.get('equal_amount_threshold', 1000),
+        equal_amount_first=config_data.equal_amount_first,
+        equal_amount_threshold=config_data.equal_amount_threshold,
     )
 
 
-@app.route('/health', methods=['GET'])
+@app.get("/health", response_model=HealthResponse, summary="健康检查", tags=["系统"])
 def health_check():
     """健康检查接口"""
-    return jsonify({
-        'status': 'healthy',
-        'service': '智能配票算法API',
-        'version': '2.0'
-    })
+    return {
+        "status": "healthy",
+        "service": "智能配票算法API",
+        "version": "2.0"
+    }
 
 
-@app.route('/api/v1/allocate', methods=['POST'])
-def allocate_single():
+@app.post(
+    "/api/v1/allocate",
+    response_model=SuccessResponse,
+    summary="单笔配票",
+    tags=["配票"],
+    responses={
+        200: {"description": "配票成功"},
+        400: {"model": ErrorResponse, "description": "请求参数错误"},
+        500: {"model": ErrorResponse, "description": "服务器内部错误"},
+    }
+)
+def allocate_single(request: AllocateRequest):
     """
     单个付款单配票接口
     
-    请求体:
-    {
-        "order": {
-            "id": "O001",
-            "amount": 500000,
-            "organization": "公司A",
-            "priority": 0
-        },
-        "tickets": [
-            {
-                "id": "T001",
-                "amount": 300000,
-                "maturity_days": 90,
-                "acceptor_class": 2,
-                "organization": "公司A"
-            },
-            ...
-        ],
-        "config": {  // 可选，使用默认配置
-            "weight_config": {...},
-            "split_config": {...},
-            ...
-        },
-        "seed": 42  // 可选，随机数种子
-    }
-    
-    响应:
-    {
-        "success": true,
-        "result": {...}  // 详细的配票结果
-    }
+    - **order**: 付款单信息（id、amount、organization、priority）
+    - **tickets**: 票据池列表
+    - **config**: 可选配置参数
+    - **seed**: 可选随机数种子
     """
     try:
-        data = request.get_json()
-        
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': '请求体不能为空'
-            }), 400
-        
-        # 解析付款单
-        order_data = data.get('order')
-        if not order_data:
-            return jsonify({
-                'success': False,
-                'error': '缺少order字段'
-            }), 400
-        
+        # 创建付款单对象
         order = PaymentOrder(
-            id=order_data['id'],
-            amount=order_data['amount'],
-            organization=order_data.get('organization', 'default'),
-            priority=order_data.get('priority', 0),
+            id=request.order.id,
+            amount=request.order.amount,
+            organization=request.order.organization,
+            priority=request.order.priority,
         )
         
-        # 解析票据池
-        tickets_data = data.get('tickets', [])
-        if not tickets_data:
-            return jsonify({
-                'success': False,
-                'error': '票据池不能为空'
-            }), 400
-        
         # 解析配置
-        config_data = data.get('config', {})
-        config = parse_config(config_data)
+        config = parse_config(request.config)
         
         # 创建票据对象
+        tickets_data = [ticket.model_dump() for ticket in request.tickets]
         tickets = create_tickets_from_data(tickets_data, config.amount_label_config)
         
         # 执行配票
-        seed = data.get('seed')
-        engine = AllocationEngine(config=config, seed=seed)
+        engine = AllocationEngine(config=config, seed=request.seed)
         result = engine.allocate(order, tickets)
         
         # 格式化输出
         output = format_allocation_result(result)
         
-        return jsonify({
-            'success': True,
-            'result': output
-        })
+        return {
+            "success": True,
+            "result": output
+        }
     
-    except KeyError as e:
-        return jsonify({
-            'success': False,
-            'error': f'缺少必需字段: {str(e)}'
-        }), 400
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"参数错误: {str(e)}"
+        )
     
     except Exception as e:
         traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': f'服务器内部错误: {str(e)}'
-        }), 500
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"服务器内部错误: {str(e)}"
+        )
 
 
-@app.route('/api/v1/allocate/batch', methods=['POST'])
-def allocate_batch():
+@app.post(
+    "/api/v1/allocate/batch",
+    response_model=SuccessResponse,
+    summary="批量配票",
+    tags=["配票"],
+    responses={
+        200: {"description": "配票成功"},
+        400: {"model": ErrorResponse, "description": "请求参数错误"},
+        500: {"model": ErrorResponse, "description": "服务器内部错误"},
+    }
+)
+def allocate_batch(request: BatchAllocateRequest):
     """
     批量配票接口
     
-    请求体:
-    {
-        "orders": [
-            {
-                "id": "O001",
-                "amount": 500000,
-                "organization": "公司A",
-                "priority": 1
-            },
-            ...
-        ],
-        "tickets": [...],
-        "config": {...},  // 可选
-        "seed": 42  // 可选
-    }
-    
-    响应:
-    {
-        "success": true,
-        "results": [...]  // 配票结果列表
-    }
+    - **orders**: 付款单列表
+    - **tickets**: 票据池列表
+    - **config**: 可选配置参数
+    - **seed**: 可选随机数种子
     """
     try:
-        data = request.get_json()
-        
-        if not data:
-            return jsonify({
-                'success': False,
-                'error': '请求体不能为空'
-            }), 400
-        
-        # 解析付款单列表
-        orders_data = data.get('orders', [])
-        if not orders_data:
-            return jsonify({
-                'success': False,
-                'error': '订单列表不能为空'
-            }), 400
-        
+        # 创建付款单对象列表
         orders = [
             PaymentOrder(
-                id=o['id'],
-                amount=o['amount'],
-                organization=o.get('organization', 'default'),
-                priority=o.get('priority', 0),
+                id=o.id,
+                amount=o.amount,
+                organization=o.organization,
+                priority=o.priority,
             )
-            for o in orders_data
+            for o in request.orders
         ]
         
-        # 解析票据池
-        tickets_data = data.get('tickets', [])
-        if not tickets_data:
-            return jsonify({
-                'success': False,
-                'error': '票据池不能为空'
-            }), 400
-        
         # 解析配置
-        config_data = data.get('config', {})
-        config = parse_config(config_data)
+        config = parse_config(request.config)
         
         # 创建票据对象
+        tickets_data = [ticket.model_dump() for ticket in request.tickets]
         tickets = create_tickets_from_data(tickets_data, config.amount_label_config)
         
         # 批量执行配票
-        seed = data.get('seed')
-        engine = AllocationEngine(config=config, seed=seed)
+        engine = AllocationEngine(config=config, seed=request.seed)
         results = engine.allocate_batch(orders, tickets)
         
         # 格式化输出
         outputs = [format_allocation_result(r) for r in results]
         
-        return jsonify({
-            'success': True,
-            'results': outputs,
-            'summary': {
-                'total_orders': len(orders),
-                'processed': len(results),
+        return {
+            "success": True,
+            "results": outputs,
+            "summary": {
+                "total_orders": len(orders),
+                "processed": len(results),
             }
-        })
+        }
     
-    except KeyError as e:
-        return jsonify({
-            'success': False,
-            'error': f'缺少必需字段: {str(e)}'
-        }), 400
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"参数错误: {str(e)}"
+        )
     
     except Exception as e:
         traceback.print_exc()
-        return jsonify({
-            'success': False,
-            'error': f'服务器内部错误: {str(e)}'
-        }), 500
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"服务器内部错误: {str(e)}"
+        )
 
 
-@app.route('/api/v1/config/default', methods=['GET'])
+@app.get(
+    "/api/v1/config/default",
+    response_model=SuccessResponse,
+    summary="获取默认配置",
+    tags=["配置"]
+)
 def get_default_config():
     """获取默认配置"""
     config = AllocationConfig()
-    return jsonify({
-        'success': True,
-        'config': {
-            'amount_label_config': {
-                'large_range': list(config.amount_label_config.large_range),
-                'medium_range': list(config.amount_label_config.medium_range),
-                'small_range': list(config.amount_label_config.small_range),
-                'large_ratio': config.amount_label_config.large_ratio,
-                'medium_ratio': config.amount_label_config.medium_ratio,
-                'small_ratio': config.amount_label_config.small_ratio,
+    return {
+        "success": True,
+        "config": {
+            "amount_label_config": {
+                "large_range": list(config.amount_label_config.large_range),
+                "medium_range": list(config.amount_label_config.medium_range),
+                "small_range": list(config.amount_label_config.small_range),
+                "large_ratio": config.amount_label_config.large_ratio,
+                "medium_ratio": config.amount_label_config.medium_ratio,
+                "small_ratio": config.amount_label_config.small_ratio,
             },
-            'weight_config': {
-                'w_maturity': config.weight_config.w_maturity,
-                'w_acceptor': config.weight_config.w_acceptor,
-                'w_amount': config.weight_config.w_amount,
-                'w_organization': config.weight_config.w_organization,
-                'maturity_strategy': config.weight_config.maturity_strategy.value,
-                'maturity_threshold': config.weight_config.maturity_threshold,
-                'acceptor_strategy': config.weight_config.acceptor_strategy.value,
-                'acceptor_class_count': config.weight_config.acceptor_class_count,
-                'amount_strategy': config.weight_config.amount_strategy.value,
-                'amount_sub_strategy': config.weight_config.amount_sub_strategy.value if config.weight_config.amount_sub_strategy else None,
-                'organization_strategy': config.weight_config.organization_strategy.value,
+            "weight_config": {
+                "w_maturity": config.weight_config.w_maturity,
+                "w_acceptor": config.weight_config.w_acceptor,
+                "w_amount": config.weight_config.w_amount,
+                "w_organization": config.weight_config.w_organization,
+                "maturity_strategy": config.weight_config.maturity_strategy.value,
+                "maturity_threshold": config.weight_config.maturity_threshold,
+                "acceptor_strategy": config.weight_config.acceptor_strategy.value,
+                "acceptor_class_count": config.weight_config.acceptor_class_count,
+                "amount_strategy": config.weight_config.amount_strategy.value,
+                "amount_sub_strategy": config.weight_config.amount_sub_strategy.value if config.weight_config.amount_sub_strategy else None,
+                "organization_strategy": config.weight_config.organization_strategy.value,
             },
-            'split_config': {
-                'allow_split': config.split_config.allow_split,
-                'tail_diff_abs': config.split_config.tail_diff_abs,
-                'tail_diff_ratio': config.split_config.tail_diff_ratio,
-                'min_remain': config.split_config.min_remain,
-                'min_use': config.split_config.min_use,
-                'min_ratio': config.split_config.min_ratio,
-                'split_strategy': config.split_config.split_strategy.value,
+            "split_config": {
+                "allow_split": config.split_config.allow_split,
+                "tail_diff_abs": config.split_config.tail_diff_abs,
+                "tail_diff_ratio": config.split_config.tail_diff_ratio,
+                "min_remain": config.split_config.min_remain,
+                "min_use": config.split_config.min_use,
+                "min_ratio": config.split_config.min_ratio,
+                "split_strategy": config.split_config.split_strategy.value,
             },
-            'constraint_config': {
-                'max_ticket_count': config.constraint_config.max_ticket_count,
-                'small_ticket_limited': config.constraint_config.small_ticket_limited,
-                'small_ticket_80pct_amount_coverage': config.constraint_config.small_ticket_80pct_amount_coverage,
+            "constraint_config": {
+                "max_ticket_count": config.constraint_config.max_ticket_count,
+                "small_ticket_limited": config.constraint_config.small_ticket_limited,
+                "small_ticket_80pct_amount_coverage": config.constraint_config.small_ticket_80pct_amount_coverage,
             },
-            'equal_amount_first': config.equal_amount_first,
-            'equal_amount_threshold': config.equal_amount_threshold,
+            "equal_amount_first": config.equal_amount_first,
+            "equal_amount_threshold": config.equal_amount_threshold,
         }
-    })
+    }
 
 
 if __name__ == '__main__':
+    import uvicorn
+    
     print("="*80)
-    print("智能配票算法 API 服务启动")
+    print("智能配票算法 API 服务启动 (FastAPI)")
     print("="*80)
-    print("访问 http://localhost:5000/health 进行健康检查")
-    print("访问 http://localhost:5000/api/v1/config/default 获取默认配置")
+    print("访问 http://localhost:8000/docs 查看交互式API文档 (Swagger UI)")
+    print("访问 http://localhost:8000/redoc 查看API文档 (ReDoc)")
+    print("访问 http://localhost:8000/health 进行健康检查")
+    print("访问 http://localhost:8000/api/v1/config/default 获取默认配置")
     print("="*80)
-    app.run(host='0.0.0.0', port=5000, debug=True)
+    
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
