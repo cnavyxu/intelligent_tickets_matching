@@ -2,6 +2,7 @@
 智能配票算法 - 工具函数
 """
 from typing import List
+from decimal import Decimal
 from .models import (
     Ticket,
     AmountLabel,
@@ -9,7 +10,7 @@ from .models import (
 )
 
 
-def classify_ticket_amount(amount: float, config: AmountLabelConfig) -> AmountLabel:
+def classify_ticket_amount(amount: Decimal, config: AmountLabelConfig) -> AmountLabel:
     """根据金额范围配置为票据划分金额标签"""
     if config.large_range[0] <= amount < config.large_range[1]:
         return AmountLabel.LARGE
@@ -26,10 +27,11 @@ def create_tickets_from_data(data: List[dict], config: AmountLabelConfig) -> Lis
     """根据原始票据字典数据批量创建Ticket对象"""
     tickets = []
     for item in data:
-        label = classify_ticket_amount(item['amount'], config)
+        amount = Decimal(str(item['amount']))
+        label = classify_ticket_amount(amount, config)
         ticket = Ticket(
             id=item['id'],
-            amount=item['amount'],
+            amount=amount,
             maturity_days=item['maturity_days'],
             acceptor_class=item['acceptor_class'],
             amount_label=label,

@@ -4,6 +4,7 @@
 本模块实现票据的拆分逻辑，用于精确匹配付款单金额
 """
 from typing import List, Optional, Tuple
+from decimal import Decimal
 
 from .models import (
     AllocationConfig,
@@ -43,7 +44,7 @@ def adjust_with_split(
     warnings: List[str] = []
     tail_diff = _calculate_tail_diff(order.amount, config)
 
-    def current_bias() -> float:
+    def current_bias() -> Decimal:
         """计算当前差额"""
         return order.amount - sum(tu.used_amount for tu in selected)
 
@@ -91,7 +92,7 @@ def adjust_with_split(
     return selected, warnings
 
 
-def _calculate_tail_diff(order_amount: float, config: AllocationConfig) -> float:
+def _calculate_tail_diff(order_amount: Decimal, config: AllocationConfig) -> Decimal:
     """
     计算尾差阈值
     
@@ -102,7 +103,7 @@ def _calculate_tail_diff(order_amount: float, config: AllocationConfig) -> float
         config: 配置对象
         
     返回:
-        float: 尾差阈值
+        Decimal: 尾差阈值
     """
     return max(
         config.split_config.tail_diff_abs,
@@ -113,7 +114,7 @@ def _calculate_tail_diff(order_amount: float, config: AllocationConfig) -> float
 def _add_split_ticket(
     selected: List[TicketUsage],
     remaining: List[Ticket],
-    bias: float,
+    bias: Decimal,
     config: AllocationConfig,
     ctx: ScoringContext,
     order: PaymentOrder,
@@ -145,7 +146,7 @@ def _add_split_ticket(
     
     usable_amount = min(bias, candidate.available_amount)
     split_ratio = usable_amount / candidate.amount
-    if split_ratio <= 0:
+    if split_ratio <= Decimal('0'):
         return None
     
     # 验证拆票约束
@@ -171,7 +172,7 @@ def _add_split_ticket(
 
 def _split_from_selected(
     selected: List[TicketUsage],
-    bias: float,
+    bias: Decimal,
     config: AllocationConfig,
     ctx: ScoringContext,
     order: PaymentOrder,
@@ -198,7 +199,7 @@ def _split_from_selected(
         candidates = selected
     
     # 优先选择未拆分的票据进行拆分
-    strict_candidates = [tu for tu in candidates if tu.split_ratio == 1.0 and tu.used_amount >= bias]
+    strict_candidates = [tu for tu in candidates if tu.split_ratio == Decimal('1.0') and tu.used_amount >= bias]
     if strict_candidates:
         candidates = strict_candidates
     
@@ -210,7 +211,7 @@ def _split_from_selected(
         if tu.ticket.id == tu_to_split.id:
             new_used = tu.used_amount - bias
             new_ratio = new_used / tu.ticket.amount
-            if new_ratio < 0:
+            if new_ratio < Decimal('0'):
                 return None
             ok, _ = validate_split_constraints(tu.ticket.amount, new_ratio, config)
             if not ok:
@@ -226,7 +227,7 @@ def _select_split_ticket(
     config: AllocationConfig,
     ctx: ScoringContext,
     order: PaymentOrder,
-    bias: float = 0.0,
+    bias: Decimal = Decimal('0.0'),
 ) -> Optional[Ticket]:
     """
     根据配置选择最适合拆分的票据

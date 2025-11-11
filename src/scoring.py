@@ -6,6 +6,7 @@
 import random
 from dataclasses import dataclass, field
 from typing import Dict, Tuple
+from decimal import Decimal
 
 from .models import (
     AllocationConfig,
@@ -29,8 +30,8 @@ class ScoringContext:
     存储票据池的统计信息，用于归一化计算
     """
     maturity_range: Tuple[int, int]  # 到期期限范围 (最小天数, 最大天数)
-    amount_range_by_label: Dict[AmountLabel, Tuple[float, float]]  # 各标签的金额范围
-    inventory_distribution: Dict[AmountLabel, float]  # 当前库存分布
+    amount_range_by_label: Dict[AmountLabel, Tuple[Decimal, Decimal]]  # 各标签的金额范围
+    inventory_distribution: Dict[AmountLabel, Decimal]  # 当前库存分布
     randomness: random.Random = field(default_factory=random.Random)  # 随机数生成器
 
 
@@ -221,7 +222,7 @@ def _score_large_first(ticket: Ticket, config: AllocationConfig, ctx: ScoringCon
             low, high = ctx.amount_range_by_label.get(AmountLabel.LARGE, (ticket.amount, ticket.amount))
             if high > low:
                 # 金额越大得分越高
-                normalized = (ticket.amount - low) / (high - low)
+                normalized = float((ticket.amount - low) / (high - low))
                 return 0.7 + 0.3 * normalized  # [0.7, 1.0]
             return 0.85
         # 随机模式：大额票得分在 [0.7, 1.0]
@@ -256,7 +257,7 @@ def _score_small_first(ticket: Ticket, config: AllocationConfig, ctx: ScoringCon
             low, high = ctx.amount_range_by_label.get(AmountLabel.SMALL, (ticket.amount, ticket.amount))
             if high > low:
                 # 金额越小得分越高
-                normalized = (high - ticket.amount) / (high - low)
+                normalized = float((high - ticket.amount) / (high - low))
                 return 0.7 + 0.3 * normalized  # [0.7, 1.0]
             return 0.85
         # 随机模式：小额票得分在 [0.7, 1.0]
@@ -294,7 +295,7 @@ def _score_optimize_inventory(ticket: Ticket, config: AllocationConfig, ctx: Sco
     current = ctx.inventory_distribution
     
     # 计算各标签超出期望的部分（正值表示超配）
-    deltas = {label: max(0.0, current.get(label, 0.0) - expected[label]) for label in AmountLabel}
+    deltas = {label: max(Decimal('0.0'), current.get(label, Decimal('0.0')) - expected[label]) for label in AmountLabel}
     total_delta = sum(deltas.values())
     
     if total_delta == 0:
@@ -303,7 +304,7 @@ def _score_optimize_inventory(ticket: Ticket, config: AllocationConfig, ctx: Sco
     
     # 超配越多的标签得分越高（优先消耗）
     # 归一化到 [0, 1]
-    score = deltas[ticket.amount_label] / total_delta
+    score = float(deltas[ticket.amount_label] / total_delta)
     return score
 
 
