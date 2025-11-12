@@ -177,15 +177,15 @@ class AllocationEngine:
                 if subset:
                     amount_range_by_label[label] = (min(subset), max(subset))
             
-            # 计算库存分布
-            total_amount = sum(t.amount for t in tickets)
+            # 计算库存分布（按张数占比，而非金额占比）
+            total_count = len(tickets)
             inventory_distribution = {}
-            if total_amount > 0:
+            if total_count > 0:
                 for label in AmountLabel:
-                    label_sum = sum(
-                        t.amount for t in tickets if t.amount_label == label
+                    label_count = sum(
+                        1 for t in tickets if t.amount_label == label
                     )
-                    inventory_distribution[label] = label_sum / total_amount
+                    inventory_distribution[label] = Decimal(str(label_count)) / Decimal(str(total_count))
             else:
                 inventory_distribution = {label: Decimal('1.0') / len(AmountLabel) for label in AmountLabel}
         

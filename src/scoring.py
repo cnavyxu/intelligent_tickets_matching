@@ -276,6 +276,20 @@ def _score_optimize_inventory(ticket: Ticket, config: AllocationConfig, ctx: Sco
     
     优先选择超过期望占比的标签，使库存趋向期望分布
     
+    注意：库存分布按票据张数占比计算，而非金额占比
+    
+    计算公式：
+    - 如果当前占比 > 期望占比：原始权重 = 2 * 当前占比 - 期望占比
+    - 否则：原始权重 = 0
+    - 最终得分 = 原始权重 / 所有标签原始权重之和
+    
+    示例（按张数占比）：
+    - 期望分布：大额0.5（50%张数）, 中额0.4（40%张数）, 小额0.1（10%张数）
+    - 实际分布：大额0.3（30%张数）, 中额0.5（50%张数）, 小额0.2（20%张数）
+    - 原始权重：大额0(因为0.3<0.5), 中额0.6(2*0.5-0.4), 小额0.3(2*0.2-0.1)
+    - 归一化得分：大额0, 中额0.6/0.9≈0.67, 小额0.3/0.9≈0.33
+    - 优先消耗顺序：中额 > 小额 > 大额
+    
     参数:
         ticket: 票据对象
         config: 配置对象
@@ -294,17 +308,28 @@ def _score_optimize_inventory(ticket: Ticket, config: AllocationConfig, ctx: Sco
     # 当前库存占比
     current = ctx.inventory_distribution
     
-    # 计算各标签超出期望的部分（正值表示超配）
-    deltas = {label: max(Decimal('0.0'), current.get(label, Decimal('0.0')) - expected[label]) for label in AmountLabel}
-    total_delta = sum(deltas.values())
+    # 计算各标签的原始权重
+    # 公式：如果当前占比 > 期望占比，则权重 = 当前占比 + (当前占比 - 期望占比) = 2 * 当前占比 - 期望占比
+    # 否则权重为0（不优先消耗）
+    raw_weights = {}
+    for label in AmountLabel:
+        current_ratio = current.get(label, Decimal('0.0'))
+        expected_ratio = expected[label]
+        if current_ratio > expected_ratio:
+            # 超出期望：优先消耗，权重考虑当前总量和超出量
+            raw_weights[label] = Decimal('2') * current_ratio - expected_ratio
+        else:
+            # 低于或等于期望：不优先消耗
+            raw_weights[label] = Decimal('0.0')
     
-    if total_delta == 0:
-        # 如果库存完美匹配期望，所有标签得分相同
+    total_weight = sum(raw_weights.values())
+    
+    if total_weight == 0:
+        # 如果所有标签都未超配，所有标签得分相同
         return 1.0 / len(AmountLabel)
     
-    # 超配越多的标签得分越高（优先消耗）
     # 归一化到 [0, 1]
-    score = float(deltas[ticket.amount_label] / total_delta)
+    score = float(raw_weights[ticket.amount_label] / total_weight)
     return score
 
 
